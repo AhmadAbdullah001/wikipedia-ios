@@ -1,0 +1,41 @@
+name: Post to Phabricator
+
+on:
+  pull_request:
+    types: [opened, closed]
+
+jobs:
+  post_to_phab:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Post to Phabricator when pull request is opened or closed
+      if: ${{ github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'closed') }}
+      env:
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        message="${{ github.actor }} ${{ github.event.action }} ${{ github.event.pull_request._links.html.href }}"
+        # Same acceptance as the release workflows (v2_deploy_*): a full URL, a URL
+        # with no scheme, or a bare task ID, one or several, separated by spaces,
+        # newlines or commas. "Bug: T12345" keeps working. "N/A" matches nothing.
+        python3 - <<'PYEOF' | while IFS= read -r line; do
+        import os
+        import re
+        body = os.environ.get('PR_BODY', '')
+        ids = []
+        for section in re.findall(
+          r'\*{0,2}Phabricator:\*{0,2}\s*((?:(?:https?://)?(?:phabricator\.wikimedia\.org/)?T\d+[\s,]*)+)',
+          body, re.IGNORECASE
+        ):
+          ids.extend(re.findall(r'T(\d+)', section, re.IGNORECASE))
+        ids.extend(re.findall(r'^Bug:\s*T(\d+)', body, re.IGNORECASE | re.MULTILINE))
+        for i in dict.fromkeys(ids):
+          print(f'T{i}')
+        PYEOF
+          echo "Processing: $line"
+          curl --header "User-Agent: GitHubPRBot/1.0 (https://phabricator.wikimedia.org/p/GitHubPRBot)" \
+              https://phabricator.wikimedia.org/api/maniphest.edit \
+              -d api.token=${{ secrets.PHAB_BOT_API_KEY }} \
+              -d transactions[0][type]=comment \
+              -d transactions[0][value]="${message}" \
+              -d objectIdentifier=${line}
+        done
